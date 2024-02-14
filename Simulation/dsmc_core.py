@@ -2,12 +2,6 @@ import numpy as np
 from pydantic import BaseModel, computed_field, PositiveFloat, PositiveInt
 import matplotlib.pyplot as plt
 
-#import scienceplots
-
-plt.style.use(["science"])
-plt.rcParams.update({"text.usetex": True, "font.family": "Computer Modern Serif"})
-plt.rcParams.update({"font.size": 18})
-
 
 class ParticleParameters(BaseModel):
     radius: PositiveFloat
@@ -27,6 +21,7 @@ class WorldParameters(BaseModel):
     Ny: PositiveInt
     Nz: PositiveInt
     T0: PositiveFloat
+    Omega: PositiveFloat
 
     @computed_field
     @property
@@ -64,15 +59,16 @@ class DSMC_Core:
         self.pp = ParticleParameters(
             radius=0.05,
             rho=900,
-            eps=0.6,
+            eps=0.1,
         )
         self.wp = WorldParameters(
             N=100_000,
-            n=0.05,
+            n=0.5,  # kg/m^3
             Nx=20,
             Ny=15,
             Nz=5,
-            T0=24.0,
+            T0=24.0,  # J
+            Omega=0.0002,  # 1/s
         )
 
     @property
@@ -114,6 +110,8 @@ class DSMC_Core:
             (self.wp.Nx, self.wp.Ny, self.wp.Nz), dtype=np.float64
         )
         self.box_nc_error.fill(0.0)
+        self.plane_box_particles = np.ndarray((self.wp.Nx, self.wp.Ny), dtype=object)
+        self.vertical_box_particles = np.ndarray((self.wp.Nz), dtype=object)
 
         # simulation characteristic constants and variables
         self.t = 0.0  # simulation time
@@ -126,10 +124,7 @@ class DSMC_Core:
         self.C_ncoll = 4 * np.pi * self.pp.radius**2 / self.wp.V_box
         # Charateristic inverse time
         self.t_c_inv = (
-            8
-            * self.wp.n
-            * self.pp.radius**2
-            * np.sqrt(np.pi * self.T0 / self.pp.mass)
+            8 * self.wp.n * self.pp.radius**2 * np.sqrt(np.pi * self.T0 / self.pp.mass)
         )
 
         self.fill_data_structures()
@@ -156,9 +151,39 @@ class DSMC_Core:
             self.box_vmax[idx] = self.C_vmax * v_thermal
 
     def translations(self) -> None:
-        self.rx = (self.rx + self.vx * self.dt + self.wp.Lx) % self.wp.Lx
-        self.ry = (self.ry + self.vy * self.dt + self.wp.Ly) % self.wp.Ly
-        self.rz = (self.rz + self.vz * self.dt + self.wp.Lz) % self.wp.Lz
+        # self.rx = (self.rx + self.vx * self.dt + self.wp.Lx) % self.wp.Lx
+        # self.ry = (self.ry + self.vy * self.dt + self.wp.Ly) % self.wp.Ly
+        # self.rz = (self.rz + self.vz * self.dt + self.wp.Lz) % self.wp.Lz
+
+        for i in range(self.wp.N):
+            x, y, z = self.rx[i], self.ry[i], self.rz[i]
+            self.rx[i] += self.vx[i] * self.dt
+            self.ry[i] = (y + self.vy[i] * self.dt + self.wp.Ly) % self.wp.Ly
+            self.rz[i] = (z + self.vz[i] * self.dt + self.wp.Lz) % self.wp.Lz
+            self.vx[i] += (
+                3 * self.wp.Omega**2 * x * self.dt
+                + 2 * self.wp.Omega * self.vy[i] * self.dt
+            )
+            self.vy[i] -= 2 * self.wp.Omega * self.vx[i] * self.dt
+            self.vz[i] -= self.wp.Omega**2 * z * self.dt
+
+            if self.rx[i] > self.wp.Lx:
+                self.rx[i] -= self.wp.Lx
+                self.ry[i] = (
+                    self.ry[i]
+                    + 3 * self.wp.Omega * self.wp.Lx * self.t / 2
+                    + self.wp.Ly
+                ) % self.wp.Ly
+                self.vy[i] += 3 * self.wp.Omega * self.wp.Lx / 2
+            elif self.rx[i] < 0:
+                self.rx[i] += self.wp.Lx
+                self.ry[i] = (
+                    self.ry[i]
+                    - 3 * self.wp.Omega * self.wp.Lx * self.t / 2
+                    + self.wp.Ly
+                ) % self.wp.Ly
+                self.vy[i] -= 3 * self.wp.Omega * self.wp.Lx / 2
+
         self.fill_data_structures()
 
     def binary_collision(self, p1: int, p2: int, vmax: float) -> int:
@@ -219,6 +244,31 @@ class DSMC_Core:
         self.translations()
         self.t += self.dt
 
+    def plane_view(self) -> None:
+        """
+        Integration of the system over the vertival (Z) axis. The integration
+        is over the spacial axis only, the velocity space is unchanged.
+        Fills the `plane_box_particles` structure, which is the a stacked over (X,Y)
+        plane version of the `box_particles` structure.
+        """
+        for idx, _ in np.ndenumerate(self.plane_box_particles):
+            self.plane_box_particles[idx] = np.ndarray((0), dtype=np.int64)
+            x, y = idx
+            self.plane_box_particles[idx] = np.append(
+                self.plane_box_particles[idx], self.box_particles[x, y]
+            )
+            self.plane_box_particles[idx] = np.concatenate(
+                self.plane_box_particles[idx], axis=0
+            )
+
+    def vertical_view(self, bins: int = 100) -> object:
+        """
+        Planar integration of the system over the (XY).
+        Fills the `vertical_box_particles` structure.
+        """
+        hist, _ = np.histogram(self.rz, bins=bins, range=(0, self.wp.Lz), density=True)
+        return hist
+
     # theoretical curves
     def haff_cooling(self, t: float) -> float:
         tc_inv = self.t_c_inv * (1 - self.pp.eps**2) / 3
@@ -240,6 +290,7 @@ class DSMC_Core:
         Simulation area linear sizes: Lx, Ly, Lz = ({self.wp.Lx:.3f}, {self.wp.Ly:.3f}, {self.wp.Lz:.3f}) m
            Volume of the cubical box:      V_box = {self.wp.V_box:.3f} m^3
               Linear size of the box:      L_box = {self.wp.L_box:.3f} m
+                       Orbital speed:      Omega = {self.wp.Omega:.5f} 1/s
         -------------------------------------------------------------------------
                                   Particle Parameters
         -------------------------------------------------------------------------
@@ -283,7 +334,7 @@ if __name__ == "__main__":
     time_array = np.asarray([sim.t])
     temp_array = np.asarray([sim.T0])
     ncol_array = np.asarray([sim.nc])
-    sim_end = 20.0
+    sim_end = 200.0
 
     while sim.t < sim_end:
         sim.make_step()
@@ -295,7 +346,7 @@ if __name__ == "__main__":
     print("")
     print("Finished simulation")
 
-    fig, (ax1, ax2) = plt.subplots(2, 1)
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1)
     fig.set_figheight(10)
     fig.set_figwidth(15)
 
@@ -317,4 +368,15 @@ if __name__ == "__main__":
     ax2.set_xlabel("Time (s)")
     ax2.set_ylabel("Cumulative number of collisions (x100 000)")
     ax2.legend()
+
+    ax3.plot(sim.vertical_view(30), "o")
+    ax3.set_xlabel("Bins")
+    ax3.set_ylabel("Number density")
+
     plt.show()
+
+    """ sim.plane_view()
+    print(sim.box_particles[0, 0])
+    print("")
+    print(sim.plane_box_particles[0, 0])
+ """
