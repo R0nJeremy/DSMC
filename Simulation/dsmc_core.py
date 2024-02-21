@@ -1,6 +1,7 @@
 import numpy as np
 from pydantic import BaseModel, computed_field, PositiveFloat, PositiveInt
 import matplotlib.pyplot as plt
+from typing import List, Tuple
 
 
 class ParticleParameters(BaseModel):
@@ -67,7 +68,7 @@ class DSMC_Core:
             Nx=20,
             Ny=15,
             Nz=5,
-            T0=24.0,  # J
+            T0=1.0,  # J
             Omega=0.0002,  # 1/s
         )
 
@@ -81,10 +82,19 @@ class DSMC_Core:
         Initializes all the parameters of the simulation, after the
         Particle and World constants are given
         """
-        # particles' positions are uniformly distributed
-        self.rx = np.random.default_rng().uniform(0, self.wp.Lx, self.wp.N)
-        self.ry = np.random.default_rng().uniform(0, self.wp.Ly, self.wp.N)
-        self.rz = np.random.default_rng().uniform(0, self.wp.Lz, self.wp.N)
+        # * particles' XY positions are uniformly distributed
+        self.rx = np.random.default_rng().uniform(
+            -self.wp.Lx / 2, self.wp.Lx / 2, self.wp.N
+        )
+        self.ry = np.random.default_rng().uniform(
+            -self.wp.Ly / 2, self.wp.Ly / 2, self.wp.N
+        )
+        self.rz = np.random.default_rng().uniform(
+            -self.wp.Lz / 2, self.wp.Lz / 2, self.wp.N
+        )
+        # * Initially the disk is completely flat
+        # self.rz = np.zeros((self.wp.N), dtype=np.float64)
+
         # particles' velocities are normally distributed with T0
         self.vx = np.random.default_rng().normal(
             0, np.sqrt(self.wp.T0 / self.pp.mass), self.wp.N
@@ -134,21 +144,29 @@ class DSMC_Core:
             self.box_particles[idx] = np.ndarray((0), dtype=np.int64)
 
         for p_idx in range(self.wp.N):
-            i = (self.rx[p_idx] / self.wp.L_box).astype(int)
-            j = (self.ry[p_idx] / self.wp.L_box).astype(int)
-            k = (self.rz[p_idx] / self.wp.L_box).astype(int)
+            i = ((self.rx[p_idx] + self.wp.Lx / 2) / self.wp.L_box).astype(int)
+            j = ((self.ry[p_idx] + self.wp.Ly / 2) / self.wp.L_box).astype(int)
+            k = ((self.rz[p_idx] + self.wp.Lz / 2) / self.wp.L_box).astype(int)
             self.box_particles[i, j, k] = np.append(self.box_particles[i, j, k], p_idx)
 
+        self.calibrated_temperature = 0.0
         for idx, p_list in np.ndenumerate(self.box_particles):
             if p_list.size == 0:
                 temperature_box = 0.0
             else:
+                ux = self.vx[p_list].mean()
+                uy = self.vy[p_list].mean()
+                uz = self.vz[p_list].mean()
                 v_T = (
-                    self.vx[p_list] ** 2 + self.vy[p_list] ** 2 + self.vz[p_list] ** 2
+                    (self.vx[p_list] - ux) ** 2
+                    + (self.vy[p_list] - uy) ** 2
+                    + (self.vz[p_list] - uz) ** 2
                 ).mean()
                 temperature_box = (self.pp.mass / 3) * v_T
+                self.calibrated_temperature += temperature_box
             v_thermal = np.sqrt(2 * temperature_box / self.pp.mass)
             self.box_vmax[idx] = self.C_vmax * v_thermal
+        self.calibrated_temperature /= self.wp.Nx * self.wp.Ny * self.wp.Nz
 
     def translations(self) -> None:
         # self.rx = (self.rx + self.vx * self.dt + self.wp.Lx) % self.wp.Lx
@@ -158,16 +176,15 @@ class DSMC_Core:
         for i in range(self.wp.N):
             x, y, z = self.rx[i], self.ry[i], self.rz[i]
             self.rx[i] += self.vx[i] * self.dt
-            self.ry[i] = (y + self.vy[i] * self.dt + self.wp.Ly) % self.wp.Ly
-            self.rz[i] = (z + self.vz[i] * self.dt + self.wp.Lz) % self.wp.Lz
+            self.ry[i] += self.vy[i] * self.dt
+            self.rz[i] += self.vz[i] * self.dt
             self.vx[i] += (
-                3 * self.wp.Omega**2 * x * self.dt
-                + 2 * self.wp.Omega * self.vy[i] * self.dt
-            )
+                3 * self.wp.Omega**2 * x + 2 * self.wp.Omega * self.vy[i]
+            ) * self.dt
             self.vy[i] -= 2 * self.wp.Omega * self.vx[i] * self.dt
             self.vz[i] -= self.wp.Omega**2 * z * self.dt
 
-            if self.rx[i] > self.wp.Lx:
+            if self.rx[i] > self.wp.Lx / 2:
                 self.rx[i] -= self.wp.Lx
                 self.ry[i] = (
                     self.ry[i]
@@ -175,7 +192,7 @@ class DSMC_Core:
                     + self.wp.Ly
                 ) % self.wp.Ly
                 self.vy[i] += 3 * self.wp.Omega * self.wp.Lx / 2
-            elif self.rx[i] < 0:
+            elif self.rx[i] < -self.wp.Lx / 2:
                 self.rx[i] += self.wp.Lx
                 self.ry[i] = (
                     self.ry[i]
@@ -183,6 +200,16 @@ class DSMC_Core:
                     + self.wp.Ly
                 ) % self.wp.Ly
                 self.vy[i] -= 3 * self.wp.Omega * self.wp.Lx / 2
+
+            if self.ry[i] > self.wp.Ly / 2:
+                self.ry[i] -= self.wp.Ly
+            elif self.ry[i] < -self.wp.Ly / 2:
+                self.ry[i] += self.wp.Ly
+
+            if self.rz[i] > self.wp.Lz / 2:
+                self.rz[i] -= self.wp.Lz
+            elif self.rz[i] < -self.wp.Lz / 2:
+                self.rz[i] += self.wp.Lz
 
         self.fill_data_structures()
 
@@ -261,13 +288,36 @@ class DSMC_Core:
                 self.plane_box_particles[idx], axis=0
             )
 
-    def vertical_view(self, bins: int = 100) -> object:
+    def plane_velocity_field(self, nx: int, ny: int):
+        dx, dy = self.wp.Lx / (2 * nx), self.wp.Ly / (2 * ny)
+        x, y = np.meshgrid(
+            np.linspace(-self.wp.Lx / 2 + dx, self.wp.Lx / 2 - dx, nx),
+            np.linspace(-self.wp.Ly / 2 + dy, self.wp.Ly / 2 - dy, ny),
+        )
+        x = x.T
+        y = y.T
+        u = np.zeros((nx, ny), dtype=np.float64)
+        v = np.zeros((nx, ny), dtype=np.float64)
+        for i in range(self.wp.N):
+            ix = ((self.rx[i] + self.wp.Lx / 2) / (2 * dx)).astype(int)
+            iy = ((self.ry[i] + self.wp.Ly / 2) / (2 * dy)).astype(int)
+            u[ix, iy] += self.vx[i]
+            v[ix, iy] += self.vy[i]
+
+        u /= self.wp.N
+        v /= self.wp.N
+
+        return (x, y, u, v)
+
+    def vertical_view(self, n_bins: int = 100) -> object:
         """
         Planar integration of the system over the (XY).
         Fills the `vertical_box_particles` structure.
         """
-        hist, _ = np.histogram(self.rz, bins=bins, range=(0, self.wp.Lz), density=True)
-        return hist
+        hist, bins = np.histogram(
+            self.rz, bins=n_bins, range=(-self.wp.Lz / 2, self.wp.Lz / 2), density=True
+        )
+        return (hist, bins)
 
     # theoretical curves
     def haff_cooling(self, t: float) -> float:
@@ -303,6 +353,8 @@ class DSMC_Core:
         -------------------------------------------------------------------------
                  Initial temperature:         T0 = {self.wp.T0:.3f} J
           Actual initial temperature:         T0 = {self.T0:.3f} J
+      Calibrated initial temperature:       T0_c = {self.calibrated_temperature:.3f} J
+               Initial thermal speed:        vth = {np.sqrt(2*self.T0/self.pp.mass):.3f} m/s
          Avg. N of particles per box:      N_box = {self.wp.N/(self.wp.Nx*self.wp.Ny*self.wp.Nz):.3f}
             Constant for coll. freq.:          C = {self.C_ncoll:.6f} 1/m
          Characteristic inverse time:    t_c_inv = {self.t_c_inv:.6f} 1/s
