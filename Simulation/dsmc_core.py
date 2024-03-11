@@ -317,7 +317,46 @@ class DSMC_Core:
         hist, bins = np.histogram(
             self.rz, bins=n_bins, range=(-self.wp.Lz / 2, self.wp.Lz / 2), density=True
         )
+        diff = np.diff(bins)[0]
+        bins = bins[:-1] + diff / 2
         return (hist, bins)
+
+    def vx_distribution(self, n_bins: int = 100) -> object:
+        hist, bins = np.histogram(
+            self.vx, bins=n_bins, range=(self.vx.min(), self.vx.max()), density=True
+        )
+        diff = np.diff(bins)[0]
+        bins = bins[:-1] + diff / 2
+        return (hist, bins)
+
+    def vy_distribution(self, n_bins: int = 100) -> object:
+        hist, bins = np.histogram(
+            self.vy, bins=n_bins, range=(self.vy.min(), self.vy.max()), density=True
+        )
+        diff = np.diff(bins)[0]
+        bins = bins[:-1] + diff / 2
+        return (hist, bins)
+
+    def vz_distribution(self, n_bins: int = 100) -> object:
+        hist, bins = np.histogram(
+            self.vz, bins=n_bins, range=(self.vz.min(), self.vz.max()), density=True
+        )
+        diff = np.diff(bins)[0]
+        bins = bins[:-1] + diff / 2
+        return (hist, bins)
+
+    def thermal_speeds_ellipsoid(self) -> Tuple[float, float, float]:
+        ux = self.vx.mean()
+        uy = self.vy.mean()
+        uz = self.vz.mean()
+
+        cx, cy, cz = self.vx - ux, self.vy - uy, self.vz - uz
+
+        vth_x = np.sqrt((cx**2).mean())
+        vth_y = np.sqrt((cy**2).mean())
+        vth_z = np.sqrt((cz**2).mean())
+
+        return (vth_x, vth_y, vth_z)
 
     # theoretical curves
     def haff_cooling(self, t: float) -> float:
@@ -333,31 +372,31 @@ class DSMC_Core:
         -------------------------------------------------------------------------
                                   World Parameters
         -------------------------------------------------------------------------
-                 Number of particles:          N = {self.wp.N:_}
-                      Number density:          n = {self.wp.n:.3f} 1/m^3
-              Simulation area volume:          V = {self.wp.V:_.3f} m^3
-                     Number of boxes: Nx, Ny, Nz = ({self.wp.Nx}, {self.wp.Ny}, {self.wp.Nz})
-        Simulation area linear sizes: Lx, Ly, Lz = ({self.wp.Lx:.3f}, {self.wp.Ly:.3f}, {self.wp.Lz:.3f}) m
-           Volume of the cubical box:      V_box = {self.wp.V_box:.3f} m^3
-              Linear size of the box:      L_box = {self.wp.L_box:.3f} m
-                       Orbital speed:      Omega = {self.wp.Omega:.5f} 1/s
+                   Number of particles:          N = {self.wp.N:_}
+                        Number density:          n = {self.wp.n:.3f} 1/m^3
+                Simulation area volume:          V = {self.wp.V:_.3f} m^3
+                       Number of boxes: Nx, Ny, Nz = ({self.wp.Nx}, {self.wp.Ny}, {self.wp.Nz})
+          Simulation area linear sizes: Lx, Ly, Lz = ({self.wp.Lx:.3f}, {self.wp.Ly:.3f}, {self.wp.Lz:.3f}) m
+             Volume of the cubical box:      V_box = {self.wp.V_box:.3f} m^3
+                Linear size of the box:      L_box = {self.wp.L_box:.3f} m
+                         Orbital speed:      Omega = {self.wp.Omega:.5f} 1/s
         -------------------------------------------------------------------------
                                   Particle Parameters
         -------------------------------------------------------------------------
-                              Radius:          R = {self.pp.radius:.3f} m
-                        Mass density:        rho = {self.pp.rho:.3f} kg/m^3
-                                Mass:          M = {self.pp.mass:.3f} kg
-          Coefficient of restitution:        eps = {self.pp.eps}
+                                Radius:          R = {self.pp.radius:.3f} m
+                          Mass density:        rho = {self.pp.rho:.3f} kg/m^3
+                                  Mass:          M = {self.pp.mass:.3f} kg
+            Coefficient of restitution:        eps = {self.pp.eps}
         -------------------------------------------------------------------------
                                   Simulation Parameters
         -------------------------------------------------------------------------
-                 Initial temperature:         T0 = {self.wp.T0:.3f} J
-          Actual initial temperature:         T0 = {self.T0:.3f} J
-      Calibrated initial temperature:       T0_c = {self.calibrated_temperature:.3f} J
-               Initial thermal speed:        vth = {np.sqrt(2*self.T0/self.pp.mass):.3f} m/s
-         Avg. N of particles per box:      N_box = {self.wp.N/(self.wp.Nx*self.wp.Ny*self.wp.Nz):.3f}
-            Constant for coll. freq.:          C = {self.C_ncoll:.6f} 1/m
-         Characteristic inverse time:    t_c_inv = {self.t_c_inv:.6f} 1/s
+                   Initial temperature:         T0 = {self.wp.T0:.5f} J
+            Actual initial temperature:         T0 = {self.T0:.5f} J
+        Calibrated initial temperature:       T0_c = {self.calibrated_temperature:.5f} J
+                 Initial thermal speed:        vth = {np.sqrt(2*self.T0/self.pp.mass):.5f} m/s
+           Avg. N of particles per box:      N_box = {self.wp.N/(self.wp.Nx*self.wp.Ny*self.wp.Nz):.3f}
+              Constant for coll. freq.:          C = {self.C_ncoll:.6f} 1/m
+           Characteristic inverse time:    t_c_inv = {self.t_c_inv:.6f} 1/s
          
         """
         return dump
