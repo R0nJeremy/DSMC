@@ -309,6 +309,27 @@ class DSMC_Core:
 
         return (x, y, u, v)
 
+    def plane_velocity_field_reduced(self, nx: int, ny: int):
+        dx, dy = self.wp.Lx / (2 * nx), self.wp.Ly / (2 * ny)
+        x, y = np.meshgrid(
+            np.linspace(-self.wp.Lx / 2 + dx, self.wp.Lx / 2 - dx, nx),
+            np.linspace(-self.wp.Ly / 2 + dy, self.wp.Ly / 2 - dy, ny),
+        )
+        x = x.T
+        y = y.T
+        u = np.zeros((nx, ny), dtype=np.float64)
+        v = np.zeros((nx, ny), dtype=np.float64)
+        for i in range(self.wp.N):
+            ix = ((self.rx[i] + self.wp.Lx / 2) / (2 * dx)).astype(int)
+            iy = ((self.ry[i] + self.wp.Ly / 2) / (2 * dy)).astype(int)
+            u[ix, iy] += self.vx[i]
+            v[ix, iy] += self.vy[i] + 3 * self.rx[i] * self.wp.Omega / 2
+
+        u /= self.wp.N
+        v /= self.wp.N
+
+        return (x, y, u, v)
+
     def vertical_view(self, n_bins: int = 100) -> object:
         """
         Planar integration of the system over the (XY).
@@ -346,15 +367,9 @@ class DSMC_Core:
         return (hist, bins)
 
     def thermal_speeds_ellipsoid(self) -> Tuple[float, float, float]:
-        ux = self.vx.mean()
-        uy = self.vy.mean()
-        uz = self.vz.mean()
-
-        cx, cy, cz = self.vx - ux, self.vy - uy, self.vz - uz
-
-        vth_x = np.sqrt((cx**2).mean())
-        vth_y = np.sqrt((cy**2).mean())
-        vth_z = np.sqrt((cz**2).mean())
+        vth_x = np.sqrt((self.vx**2).mean())
+        vth_y = np.sqrt(((self.vy + 3 * self.rx * self.wp.Omega / 2) ** 2).mean())
+        vth_z = np.sqrt((self.vz**2).mean())
 
         return (vth_x, vth_y, vth_z)
 
